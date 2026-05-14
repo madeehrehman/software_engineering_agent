@@ -1,0 +1,23 @@
+{
+  "key": "TICKET-12",
+  "summary": "Add rate limiting to /api/login",
+  "description": "We've seen brute-force attempts against /api/login. Add a rate limit. Discuss the limit value with security.",
+  "issue_type": "Story",
+  "status": "To Do",
+  "priority": "High",
+  "labels": ["security", "api"],
+  "components": ["auth"],
+  "acceptance_criteria": [
+    "/api/login returns HTTP 429 after the configured threshold",
+    "rate limit is configurable per environment"
+  ],
+  "reporter": "alice@example.com",
+  "assignee": null,
+  "comments": [
+    {
+      "author": "carol@example.com",
+      "body": "Security suggests 10 requests / 60s / IP as a starting point but please confirm.",
+      "created": "2026-04-30T15:21:00Z"
+    }
+  ]
+}

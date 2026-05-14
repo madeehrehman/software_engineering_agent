@@ -1,0 +1,14 @@
+{
+  "key": "TICKET-13",
+  "summary": "Make the site faster",
+  "description": "It feels slow.",
+  "issue_type": "Story",
+  "status": "To Do",
+  "priority": null,
+  "labels": [],
+  "components": [],
+  "acceptance_criteria": [],
+  "reporter": "bob@example.com",
+  "assignee": null,
+  "comments": []
+}

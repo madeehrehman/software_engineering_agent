@@ -1,0 +1,29 @@
+{
+  "key": "DEMO-42",
+  "summary": "Add a TokenBucket rate limiter helper",
+  "description": "Several endpoints want IP-based rate limiting. Implement a small `TokenBucket(capacity, refill_per_second)` class with an `allow(key)` method. Pure Python, no I/O, no clock injection needed — accept an optional `now` callable for testing.",
+  "issue_type": "Story",
+  "status": "To Do",
+  "priority": "High",
+  "labels": ["security", "api", "utility"],
+  "components": ["rate-limit"],
+  "acceptance_criteria": [
+    "`TokenBucket(capacity=N, refill_per_second=R).allow(key)` returns True for the first N calls per key, then False until refill",
+    "Calls refill at `refill_per_second` tokens/sec (clamped to `capacity`)",
+    "A test injects a fake `now` so the test is deterministic and does not sleep"
+  ],
+  "reporter": "alice@example.com",
+  "assignee": null,
+  "comments": [
+    {
+      "author": "carol@example.com",
+      "body": "Make `allow()` thread-safety out of scope for v1; we'll add a Lock in a follow-up PR.",
+      "created": "2026-05-13T11:00:00Z"
+    },
+    {
+      "author": "dan@example.com",
+      "body": "Please use the project's existing `unittest` style — no pytest yet.",
+      "created": "2026-05-13T15:42:00Z"
+    }
+  ]
+}
