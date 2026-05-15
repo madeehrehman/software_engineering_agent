@@ -30,7 +30,7 @@ The system attaches to a **target repository**, initializes a `.deepagent/` work
 
 `INTAKE` → **Requirements analysis** (Backlog Analyzer) → gate → **Development** (Developer, TDD in a sandbox) → gate → **PR review** (PR Reviewer) → gate → `DONE`
 
-A single **Orchestrator** owns the FSM and the **memory curation gate**; three **subagents** each implement `run(TaskAssignment) -> ArtifactReturn`, self-verify structured outputs, and may emit **proposed memory** that only the orchestrator can promote.
+A single **Orchestrator** owns the FSM and the **memory curation gate**. When wired with `llm=`, an optional **`MasterAgent`** supervisor handles long-horizon planning, gate judgment, and dispatch briefs (spec §3.1 planning tool). Three **subagents** each implement `run(TaskAssignment) -> ArtifactReturn`, self-verify structured outputs, and may emit **proposed memory** that only the orchestrator can promote.
 
 Design authority lives in **`sdlc-deep-agent-spec.md`**. Rationale for major tradeoffs (TDD-merge vs split tester, why no LangGraph in-tree, MCP swap points) lives in **`ARCHITECTURE.md`**.
 
@@ -39,11 +39,12 @@ Design authority lives in **`sdlc-deep-agent-spec.md`**. Rationale for major tra
 ## Features
 
 - **Explicit SDLC FSM** with `PROCEED` / `RETRY` / `BLOCKED` / `NEEDS_HUMAN` routing; state persisted after every transition for resume.
+- **Master agent (optional):** `MasterAgent` in `orchestrator/master_agent.py` — ticket plan at intake, LLM gate evaluation with safety rails, retry guidance on `TicketState.retry_notes`; rule-based `evaluate_default_gate()` when `llm` is omitted.
 - **Three production-shaped subagents:** Jira-backed requirement analysis, sandboxed TDD developer, git-diff-based structured review—all with schema-constrained LLM I/O and self-checks.
 - **Stateful-by-injection assignments:** curated project facts + per-role lore + **inlined prior artifact bodies** (subagents never need read access to `.deepagent/artifacts/`).
 - **Curation gate:** evidence-aware promotion, corroboration for medium/low confidence, deduplication—sole path to durable `project_memory.json` / `subagent_lore/`.
 - **Human-in-the-loop:** `GateApprover` protocol (`HaltForHuman`, `AutoApprove`, `AutoReject`, `ScriptedApprover`) wired at requirements and review gates via config.
-- **Skills:** versioned Markdown in `skills/`, loaded by `SkillLoader` and merged into each subagent’s system prompt via per-role `DEFAULT_SKILLS`.
+- **Skills:** versioned Markdown in `skills/`, loaded by `SkillLoader` and merged into each role’s system prompt (`DEFAULT_SKILLS` on subagents; `master-agent` on `MasterAgent`).
 - **Cold trajectories:** append-only `.deepagent/trajectories/<session-id>/<task-id>.jsonl` records every LLM prompt/response when a `TrajectoryRecorder` is wired; episodic log events carry matching `session_id`.
 - **Deterministic demo:** `scripts/demo.py` runs a non-trivial ticket with a canned LLM (no API key required).
 
@@ -110,7 +111,7 @@ python -m pytest --run-live -m live
 
 ### End-to-end demo
 
-`scripts/demo.py` initializes `.deepagent/` in a temporary target repo (or use `--target-repo`), wires **BacklogAnalyzer**, **Developer**, and **PRReviewer** with shared **skills** and **trajectories**, and prints phase transitions, promoted memory, episodic summaries, and per-task trajectory files.
+`scripts/demo.py` initializes `.deepagent/` in a temporary target repo (or use `--target-repo`), wires **BacklogAnalyzer**, **Developer**, and **PRReviewer** with shared **skills** and **trajectories**, passes **`llm`** / **`recorder`** / **`skills`** into **`Orchestrator`** (enabling **MasterAgent**), and prints phase transitions, promoted memory, episodic summaries, and per-task trajectory files.
 
 ```powershell
 python scripts\demo.py                 # stdout narrative; temp dir discarded
@@ -131,7 +132,10 @@ from sdlc_agent.contracts import SubagentName
 from sdlc_agent.memory import initialize_deepagent
 from sdlc_agent.orchestrator.dispatcher import Orchestrator
 # Construct registry: dict[SubagentName, Subagent], paths: DeepAgentPaths, then:
-# orch = Orchestrator(paths=paths, registry=registry, session_id="my-session")
+# orch = Orchestrator(
+#     paths=paths, registry=registry, session_id="my-session",
+#     llm=openai_client, recorder=recorder, skills=skill_loader,  # enables MasterAgent
+# )
 # orch.intake("TICKET-1", ticket_inputs={"jira_key": "TICKET-1", ...})
 # orch.run_to_completion("TICKET-1")
 ```
@@ -149,7 +153,7 @@ Subagents (`BacklogAnalyzer`, `Developer`, `PRReviewer`) accept optional `skills
 
 | Principle | Meaning in this codebase |
 |-----------|---------------------------|
-| One orchestrator | `Orchestrator` in `orchestrator/dispatcher.py`—only component that transitions the FSM, writes `.deepagent/`, and runs the curation gate. |
+| One orchestrator | `Orchestrator` in `orchestrator/dispatcher.py`—only component that transitions the FSM, writes `.deepagent/`, and runs the curation gate. Optional `MasterAgent` (`master_agent.py`) when `llm=` is passed. |
 | Recursion depth 1 | Subagents do not delegate; they return one verified `ArtifactReturn` per dispatch. |
 | Disk is memory | `MemoryStores`, JSON/JSONL under `.deepagent/`; context carries a working subset via `TaskAssignment`. |
 | Curation gate | `orchestrator/curation.py`; subagents emit `ProposedMemory` only. |
@@ -157,7 +161,7 @@ Subagents (`BacklogAnalyzer`, `Developer`, `PRReviewer`) accept optional `skills
 
 **SDLC phases** (high level): `INTAKE` → `REQUIREMENTS_ANALYSIS` → `REQUIREMENTS_GATE` → `DEVELOPMENT` → `DEVELOPMENT_GATE` → `PR_REVIEW` → `REVIEW_GATE` → `DONE` (or `BLOCKED` / `NEEDS_HUMAN`).
 
-For diagrams, gate decisions, and “why not LangGraph / why merge TDD,” read **`ARCHITECTURE.md`** and **`sdlc-deep-agent-spec.md`** §4–§5 and §12–§13.
+For diagrams (including master-agent flow), gate decisions, and “why not LangGraph / why merge TDD,” read **`system-design.md`**, **`ARCHITECTURE.md`**, and **`sdlc-deep-agent-spec.md`** §4–§5 and §12–§13.
 
 ---
 
@@ -169,7 +173,7 @@ For diagrams, gate decisions, and “why not LangGraph / why merge TDD,” read 
 | `skills/` | Shared Markdown skills (project-agnostic doctrine). |
 | `scripts/demo.py` | Runnable end-to-end scenario with deterministic canned LLM. |
 | `scripts/demo_fixtures/jira/` | Jira JSON fixtures used only by the demo. |
-| `tests/phase0` … `tests/phase5` | Phase-aligned pytest modules (initializer through skills + trajectories integration). |
+| `tests/phase0` … `tests/phase6` | Phase-aligned pytest modules (initializer through master agent supervisor). |
 | `sdlc-deep-agent-spec.md` | Canonical architecture + contracts + phased build checklist (updated to match this repo). |
 | `ARCHITECTURE.md` | Decision log and extension seams. |
 
@@ -186,7 +190,7 @@ Created under a chosen **repository root** (the “target project”):
 | `subagent_lore/*.json` | Per-role durable lore after promotion. |
 | `episodic/log.jsonl` | Append-only audit stream (`transition`, `dispatch`, `gate`, `promotion`, HITL, …) with **`session_id`**. |
 | `artifacts/<ticket-id>/` | Persisted `ArtifactReturn` payloads per phase (`requirement_analysis.json`, `implementation_summary.json`, `review.json`). |
-| `state/<ticket-id>.json` | Resume point for that ticket’s FSM. |
+| `state/<ticket-id>.json` | Resume point for that ticket’s FSM (`plan`, `retry_notes` when master agent is used). |
 | `trajectories/<session-id>/<task-id>.jsonl` | Cold LLM transcripts when recording is enabled. |
 
 `.deepagent/` is listed in `.gitignore`—it belongs to each target workspace, not necessarily to this system repo’s own git history.
@@ -196,7 +200,7 @@ Created under a chosen **repository root** (the “target project”):
 ## Testing
 
 ```powershell
-python -m pytest              # default: fast, mocked LLM, 135 tests
+python -m pytest              # default: fast, mocked LLM, 141 tests (+ 2 skipped live)
 python -m pytest -v           # verbose per test
 python -m pytest tests/phase4 # focus one phase
 python -m pytest --run-live -m live   # optional live OpenAI (needs key + flag)
@@ -213,6 +217,7 @@ python -m pytest --run-live -m live   # optional live OpenAI (needs key + flag)
 | **README.md** (this file) | Operators and new contributors—setup, usage, navigation. |
 | **sdlc-deep-agent-spec.md** | Full system design, contracts §6–§7, memory §5, phased build §11—**aligned with the reference implementation.** |
 | **ARCHITECTURE.md** | Technical lead / reviewer—tradeoffs, swaps, intentional non-goals. |
+| **system-design.md** | Mermaid diagrams—context, components, memory, FSM, master-agent gate path. |
 | **`skills/README.md`** | How to add skills and how `SkillLoader` composes prompts. |
 
 ---
@@ -232,4 +237,4 @@ Contributions should keep **single-owner FSM + curation**, **least-privilege ass
 
 ## Origin
 
-Originally shaped as an Accenture tech-lead style assessment (**`sdlc-deep-agent-spec.md`** §12 describes the historical *minimum* scope). **This repository implements the full phased design** (0–5), including the third subagent, skills, and trajectory storage, for reproducible study and production-oriented iteration.
+Originally shaped as an Accenture tech-lead style assessment (**`sdlc-deep-agent-spec.md`** §12 describes the historical *minimum* scope). **This repository implements the full phased design** (0–6), including the third subagent, skills, trajectory storage, and orchestrator **master agent**, for reproducible study and production-oriented iteration.

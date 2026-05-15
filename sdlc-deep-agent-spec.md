@@ -2,7 +2,7 @@
 
 > **How to use this document.** This is both a design spec and an IDE build prompt. Paste it whole into your coding agent as the anchoring context, then drive the build phase by phase (Section 11). Each phase is independently testable. The architecture is fixed; the tech stack in Section 9 separates *recommended* swaps from the *reference implementation* in this repo.
 
-> **Implementation alignment (reference repo).** Sections 1–8 and 13 describe the **architecture** (load-bearing invariants). Sections 9–11 also document how the **current Python package** (`sdlc_agent`) realizes that architecture: vanilla FSM orchestration (not LangGraph), OpenAI with strict JSON-schema outputs, fixture-backed Jira + local `git` subprocess, subprocess sandbox for the Developer, skills under `skills/` with per-role default loading, trajectory JSONL under `.deepagent/trajectories/<session-id>/`, and episodic events stamped with `session_id`. See `README.md` for operator-facing setup and `ARCHITECTURE.md` for tradeoffs.
+> **Implementation alignment (reference repo).** Sections 1–8 and 13 describe the **architecture** (load-bearing invariants). Sections 9–11 also document how the **current Python package** (`sdlc_agent`) realizes that architecture: vanilla FSM orchestration (not LangGraph) with an optional in-process **`MasterAgent`** supervisor when `Orchestrator` is wired with `llm=`, OpenAI with strict JSON-schema outputs, fixture-backed Jira + local `git` subprocess, subprocess sandbox for the Developer, skills under `skills/` (including `master-agent.md`) with per-role default loading, trajectory JSONL under `.deepagent/trajectories/<session-id>/`, and episodic events stamped with `session_id`. See `README.md` for operator-facing setup, `system-design.md` for diagrams, and `ARCHITECTURE.md` for tradeoffs.
 
 ---
 
@@ -222,8 +222,8 @@ Swap freely at integration boundaries. Below, **Recommended** is the long-term /
 | Concern | Recommended | Reference implementation |
 |--------|---------------|---------------------------|
 | **Language** | Python 3.11+ | Python 3.11+ (`requires-python` in `pyproject.toml`) |
-| **Orchestration** | LangGraph (supervisor, subgraphs, optional checkpointing) | **Vanilla Python FSM** — `SDLCPhase`, pure transition helpers, `Orchestrator.advance()` / `run_to_completion()` |
-| **LLM** | OpenAI or other provider with structured output | **OpenAI** Chat Completions API; `OpenAIClient.complete()` with optional `response_format` JSON Schema (`strict: true`) for subagents |
+| **Orchestration** | LangGraph (supervisor, subgraphs, optional checkpointing) | **Vanilla Python FSM** — `SDLCPhase`, pure transition helpers, `Orchestrator.advance()` / `run_to_completion()`; optional **`MasterAgent`** (`master_agent.py`) for plan, gate evaluation, and dispatch briefs when `llm=` is passed; rule-based `evaluate_default_gate()` when not |
+| **LLM** | OpenAI or other provider with structured output | **OpenAI** Chat Completions API; `OpenAIClient.complete()` with optional `response_format` JSON Schema (`strict: true`) for subagents and master agent |
 | **Persistence** | Plain files under `.deepagent/` | JSON / JSONL / YAML as in §5.1; `MemoryStores` owns all writes except subagent sandboxes |
 | **Jira** | Real Jira MCP server (read) | **`FixtureJiraMCP`** — loads issues from JSON fixtures; **`JiraMCPStub`** for Phase 0 handshake tests |
 | **Git** | Real git MCP (diff, PR lifecycle) | **`LocalGitClient`** — local `git` subprocess for diff / files changed / branch; **`GitMCPStub`** for handshake |
@@ -243,6 +243,7 @@ Skills are **shared infrastructure**, not bolted onto one agent. A skill is a re
   - `requirement-ambiguity-checklist.md` (Backlog Analyzer)
   - `tdd-discipline.md` (Developer)
   - `pr-review-rubric.md` (PR Reviewer)
+  - `master-agent.md` (Orchestrator `MasterAgent` supervisor)
 - **Loading:** **`SkillLoader`** resolves names to file contents (validated names, in-process cache). **`assemble_system_prompt`** appends a `--- LOADED SKILLS ---` section to the subagent base system prompt when a loader is wired in.
 - **Resolution in reference code:** **Static per role** — each subagent class exposes `DEFAULT_SKILLS: tuple[str, ...]` matching the files above. The orchestrator/demo passes a shared `SkillLoader` into subagent constructors. Future: add `skills: []` to `TaskAssignment` (§6) for per-task overrides without changing skill file format.
 - **Versioning / scope:** Treat skills as repo-versioned, project-agnostic doctrine. Durable, ticket-specific claims live in `project_memory.json` / `subagent_lore/` after curation, not in `skills/`.
@@ -253,7 +254,7 @@ Skills are **shared infrastructure**, not bolted onto one agent. A skill is a re
 
 Each phase is independently testable. Do not start a phase before the prior one's test passes.
 
-**Reference repo status:** All phases below are **implemented** in `tests/phase0` … `tests/phase5` with **135** automated tests (plus **2** opt-in live OpenAI tests). `scripts/demo.py` exercises a non-trivial fixture ticket end-to-end with a deterministic canned LLM.
+**Reference repo status:** All phases below are **implemented** in `tests/phase0` … `tests/phase6` with **141** automated tests (plus **2** opt-in live OpenAI tests). `scripts/demo.py` exercises a non-trivial fixture ticket end-to-end with a deterministic canned LLM and wires `MasterAgent` on the orchestrator.
 
 ### Phase 0 — Scaffold
 - System repo structure, `config.yaml` schema, `.deepagent/` initializer.
@@ -288,13 +289,22 @@ Each phase is independently testable. Do not start a phase before the prior one'
 - End-to-end demo (`scripts/demo.py`) and architecture writeup (`ARCHITECTURE.md`).
 - **Test:** skill resolution/injection; one JSONL per task; Developer multi-step loop produces one trace line per iteration + summary line.
 
+### Phase 6 — Orchestrator master agent (supervisor LLM)
+- **`MasterAgent`** (`orchestrator/master_agent.py`): system prompt + `master-agent` skill; structured outputs for plan and gate decisions.
+- **`Orchestrator`** accepts `llm=`, `recorder=`, `skills=`, or explicit `master_agent=`; auto-builds `MasterAgent` when `llm` is set.
+- **`TicketState`:** `plan` (long-horizon plan at intake), `retry_notes` (per work-phase guidance after `retry` gate decisions).
+- Gate path: `MasterAgent.evaluate_gate()` with safety rails and fallback to `evaluate_default_gate()`; without `llm`, gates remain rule-based only.
+- Dispatch briefs via `build_task_description()` when master agent is present.
+- Trajectory kinds `master_agent.plan` / `master_agent.gate`; episodic `master_agent_plan` at intake.
+- **Test:** `tests/phase6/test_master_agent.py` — plan persistence, gate routing, retry guidance, dispatcher integration, fallback behavior.
+
 ---
 
 ## 12. Scoping for the Accenture Deliverable (historical minimum)
 
 The original assessment framing asked candidates to **architect for three subagents** but **implement two** bookends plus a strong curation path (see wording preserved in assessments that cite this doc).
 
-**This repository goes further:** Phases 0–5 are **fully implemented**, including the **Developer** (merged TDD loop + sandbox), **skills**, **trajectory archiving**, **`ARCHITECTURE.md`**, and **`scripts/demo.py`**. Treat §12 as the *minimum credible slice* for a time-boxed submission; treat the codebase as the *full* spec realization for learning and extension.
+**This repository goes further:** Phases 0–6 are **fully implemented**, including the **Developer** (merged TDD loop + sandbox), **skills**, **trajectory archiving**, orchestrator **`MasterAgent`** supervisor, **`ARCHITECTURE.md`**, **`system-design.md`**, and **`scripts/demo.py`**. Treat §12 as the *minimum credible slice* for a time-boxed submission; treat the codebase as the *full* spec realization for learning and extension.
 
 Regardless of scope, reviewers expect explicit tradeoff discussion — especially **merging code and test generation in one Developer** vs splitting an adversarial Tester. Arguments: merging wins for testability-by-construction in the same loop; splitting wins for orthogonal bug-finding — partially recovered by the **PR Reviewer**, which never authored the implementation. Detail: **`ARCHITECTURE.md`**.
 

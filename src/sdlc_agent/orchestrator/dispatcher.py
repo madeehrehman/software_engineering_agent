@@ -22,7 +22,7 @@ from sdlc_agent.llm import OpenAIClient
 from sdlc_agent.memory.paths import DeepAgentPaths
 from sdlc_agent.memory.stores import MemoryStores
 from sdlc_agent.memory.trajectories import TrajectoryRecorder
-from sdlc_agent.orchestrator.brain import OrchestratorBrain
+from sdlc_agent.orchestrator.master_agent import MasterAgent
 from sdlc_agent.orchestrator.curation import (
     CurationGate,
     CurationResult,
@@ -86,7 +86,7 @@ class Orchestrator:
         llm: OpenAIClient | None = None,
         recorder: TrajectoryRecorder | None = None,
         skills: SkillLoader | None = None,
-        brain: OrchestratorBrain | None = None,
+        master_agent: MasterAgent | None = None,
     ) -> None:
         self.paths = paths
         self.registry = registry
@@ -97,17 +97,17 @@ class Orchestrator:
         self.curation = curation or CurationGate(self.memory)
         self.session_id = session_id or uuid.uuid4().hex[:12]
         self.recorder = recorder
-        if brain is not None:
-            self.brain = brain
+        if master_agent is not None:
+            self.master_agent = master_agent
         elif llm is not None:
-            self.brain = OrchestratorBrain(
+            self.master_agent = MasterAgent(
                 self.memory,
                 llm,
                 recorder=recorder,
                 skills=skills,
             )
         else:
-            self.brain = None
+            self.master_agent = None
 
     # ---------------------------------------------------------------- intake
     def intake(
@@ -132,10 +132,10 @@ class Orchestrator:
             ticket_inputs=dict(ticket_inputs or {}),
         )
         state.record_transition(SDLCPhase.REQUIREMENTS_ANALYSIS, rationale="intake")
-        if self.brain is not None and state.plan is None:
-            self.brain.create_plan(state)
+        if self.master_agent is not None and state.plan is None:
+            self.master_agent.create_plan(state)
             self._log_episode(
-                "orchestrator_plan",
+                "master_agent_plan",
                 state,
                 extra={"goal": (state.plan or {}).get("goal", "")},
             )
@@ -240,8 +240,8 @@ class Orchestrator:
                 gate, approval, attempts_in_phase=attempts
             )
             self._log_hitl_event(state, gate, approval)
-        elif self.brain is not None:
-            decision, rationale = self.brain.evaluate_gate(
+        elif self.master_agent is not None:
+            decision, rationale = self.master_agent.evaluate_gate(
                 gate,
                 artifact,
                 state,
@@ -364,8 +364,8 @@ class Orchestrator:
             "attempt": attempt,
         }
         inputs.update(self._prior_artifact_inputs(state, phase))
-        if self.brain is not None:
-            task_text = self.brain.build_task_description(
+        if self.master_agent is not None:
+            task_text = self.master_agent.build_task_description(
                 state, phase, subagent, attempt
             )
         else:

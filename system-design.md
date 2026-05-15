@@ -24,6 +24,7 @@ flowchart TB
   subgraph Process["sdlc_agent process"]
     direction TB
     ORCH["Orchestrator<br/>dispatcher + FSM + gate routing"]
+    MA["MasterAgent optional<br/>plan gate dispatch briefs"]
     CG["CurationGate"]
     GA["GateApprover"]
     LOAD["SkillLoader<br/>skills *.md"]
@@ -39,6 +40,9 @@ flowchart TB
     ORCH --> REG
     ORCH --> CG
     ORCH --> GA
+    ORCH -. llm wired .-> MA
+    MA --> OAI
+    LOAD -. master-agent skill .-> MA
     REG --> BA
     REG --> DV
     REG --> PR
@@ -94,6 +98,7 @@ flowchart LR
   subgraph Orchestrator_pkg["orchestrator/"]
     SM["state_machine.py<br/>pure FSM transitions"]
     DP["dispatcher.py<br/>Orchestrator"]
+    MG["master_agent.py<br/>MasterAgent optional"]
     CU["curation.py"]
     HI["hitl.py"]
   end
@@ -118,9 +123,12 @@ flowchart LR
   end
 
   DP --> SM
+  DP --> MG
   DP --> CU
   DP --> HI
   DP --> STO
+  MG --> LLM
+  MG --> STO
   DP --> TA
   BA2 --> TA
   DV2 --> TA
@@ -152,7 +160,7 @@ Three logical stores plus cold trajectories, as on disk.
 ```mermaid
 flowchart TB
   subgraph Working["1 Working state per ticket"]
-    SF["state ticket_id.json<br/>TicketState current_phase attempts history"]
+    SF["state ticket_id.json<br/>TicketState phase attempts plan retry_notes"]
   end
 
   subgraph Curated["2 Curated cross-session"]
@@ -232,7 +240,13 @@ sequenceDiagram
   participant C as CurationGate
 
   O->>M: load TicketState
+  opt master agent at intake
+    O->>O: MasterAgent.create_plan persist state.plan
+  end
   O->>O: build TaskAssignment injected context prior inputs
+  opt master agent
+    O->>O: MasterAgent.build_task_description brief
+  end
   O->>S: run assignment
   loop each LLM call when using structured output
     S->>L: chat completion JSON schema
@@ -247,18 +261,43 @@ sequenceDiagram
   O->>C: evaluate proposed_memory
   C->>M: promote or reject log proposal_received promotion rejection
   O->>O: transition to gate phase
+  opt master agent at gate
+    O->>O: MasterAgent.evaluate_gate LLM plus safety rails
+  else no llm
+    O->>O: evaluate_default_gate rule-based
+  end
   O->>M: save TicketState
 ```
 
 ---
 
-## 6. Least privilege: what each role touches
+## 6. Master agent vs rule-based gates
+
+When `Orchestrator` is constructed with `llm=` (or an explicit `master_agent=`),
+`dispatcher.py` auto-builds `MasterAgent` and uses it for planning, gating, and
+dispatch briefs. Trajectory kinds: `master_agent.plan`, `master_agent.gate`.
+Episodic event at intake: `master_agent_plan`.
+
+Without `llm`, the same FSM and episodic shape run; only gate *semantics* use
+`evaluate_default_gate()` from `state_machine.py` (self-checks, attempt caps).
+
+| Concern | With `MasterAgent` | Without (`llm=None`) |
+|---------|-------------------|----------------------|
+| Long-horizon plan | `state.plan` from LLM at intake | `plan` stays `None` |
+| Gate decision | LLM + safety rails; fallback on parse error | Self-check rules only |
+| Dispatch brief | Plan focus + `retry_notes` | Generic phase/subagent stub |
+| Skill | `master-agent.md` via `DEFAULT_MASTER_AGENT_SKILLS` | N/A |
+
+---
+
+## 7. Least privilege: what each role touches
 
 ```mermaid
 flowchart TB
   subgraph Orchestrator_only["Orchestrator only"]
     W["write .deepagent all stores"]
     R["read all stores build assignments"]
+    MA2["MasterAgent call LLM no sandbox no git write"]
   end
 
   subgraph BA["BacklogAnalyzer"]

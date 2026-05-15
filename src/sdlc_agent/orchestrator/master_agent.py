@@ -1,9 +1,8 @@
-"""Orchestrator brain: the deep-agent supervisor (spec §3.1).
+"""Orchestrator master agent: the deep-agent supervisor (spec §3.1).
 
 The orchestrator is the long-horizon reasoning layer — planning, gate decisions,
 and dispatch briefs. Subagents remain stateless workers with narrow prompts;
-this module holds the system prompt and LLM calls that make the supervisor
-the brain of the system.
+this module holds the system prompt and LLM calls for the supervisor master agent.
 """
 
 from __future__ import annotations
@@ -28,8 +27,9 @@ from sdlc_agent.orchestrator.state_machine import (
 from sdlc_agent.skills import SkillLoader, assemble_system_prompt
 from sdlc_agent.subagents.base import call_llm_with_schema
 
-ORCHESTRATOR_SYSTEM_PROMPT = """\
-You are the Orchestrator — the deep agent supervisor for a project-scoped SDLC system.
+MASTER_AGENT_SYSTEM_PROMPT = """\
+You are the Orchestrator — the deep agent supervisor (master agent) for a
+project-scoped SDLC system.
 
 You own the long-horizon plan and every gate decision. You do NOT write code, run
 tests, or review diffs directly. You delegate to specialized subagents and judge
@@ -57,7 +57,7 @@ You receive subagent self-verification but you are the final judge at the gate.
 Respond ONLY in the JSON shape required by the structured-output schema.
 """
 
-DEFAULT_ORCHESTRATOR_SKILLS: tuple[str, ...] = ("orchestrator-supervisor",)
+DEFAULT_MASTER_AGENT_SKILLS: tuple[str, ...] = ("master-agent",)
 
 _PLAN_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -105,8 +105,8 @@ _GATE_CRITERIA: dict[SDLCPhase, str] = {
 }
 
 
-class OrchestratorBrain:
-    """LLM-backed supervisor: planning, gating, and dispatch briefs."""
+class MasterAgent:
+    """LLM-backed supervisor master agent: planning, gating, and dispatch briefs."""
 
     def __init__(
         self,
@@ -115,13 +115,13 @@ class OrchestratorBrain:
         *,
         recorder: TrajectoryRecorder | None = None,
         skills: SkillLoader | None = None,
-        skill_names: tuple[str, ...] = DEFAULT_ORCHESTRATOR_SKILLS,
+        skill_names: tuple[str, ...] = DEFAULT_MASTER_AGENT_SKILLS,
     ) -> None:
         self.memory = memory
         self.llm = llm
         self.recorder = recorder
         self._system = assemble_system_prompt(
-            ORCHESTRATOR_SYSTEM_PROMPT,
+            MASTER_AGENT_SYSTEM_PROMPT,
             loader=skills,
             skill_names=skill_names,
         )
@@ -130,16 +130,16 @@ class OrchestratorBrain:
     def create_plan(self, state: TicketState) -> dict[str, Any]:
         """Produce and persist a long-horizon plan on ``state.plan``."""
         user = self._build_plan_prompt(state)
-        task_id = f"{state.ticket_id}-orchestrator-plan"
+        task_id = f"{state.ticket_id}-master-agent-plan"
         plan_body = call_llm_with_schema(
             self.llm,
             system=self._system,
             user=user,
-            schema_name="orchestrator_plan",
+            schema_name="master_agent_plan",
             schema=_PLAN_SCHEMA,
             recorder=self.recorder,
             task_id=task_id,
-            kind="orchestrator.plan",
+            kind="master_agent.plan",
             metadata={"ticket_id": state.ticket_id},
         )
         state.plan = plan_body
@@ -169,15 +169,15 @@ class OrchestratorBrain:
                 self.llm,
                 system=self._system,
                 user=user,
-                schema_name="orchestrator_gate",
+                schema_name="master_agent_gate",
                 schema=_GATE_SCHEMA,
                 recorder=self.recorder,
                 task_id=task_id,
-                kind="orchestrator.gate",
+                kind="master_agent.gate",
                 metadata={"gate": gate.value, "ticket_id": state.ticket_id},
             )
             decision = _parse_gate_decision(raw["decision"])
-            rationale = str(raw.get("rationale", "")).strip() or f"{gate}: orchestrator decision"
+            rationale = str(raw.get("rationale", "")).strip() or f"{gate}: master agent decision"
             retry_guidance = str(raw.get("retry_guidance", "")).strip()
         except (ValueError, KeyError):
             return evaluate_default_gate(
@@ -213,7 +213,7 @@ class OrchestratorBrain:
         subagent: SubagentName,
         attempt: int,
     ) -> str:
-        """Orchestrator-authored brief for the subagent (not a generic stub)."""
+        """Master-agent-authored brief for the subagent (not a generic stub)."""
         parts: list[str] = [
             f"Ticket {state.ticket_id} — {phase.value} via {subagent.value} "
             f"(attempt {attempt}).",
@@ -225,7 +225,7 @@ class OrchestratorBrain:
                 parts.append(f"Current focus: {focus}")
         retry = state.retry_notes.get(phase.value, "")
         if retry:
-            parts.append(f"Orchestrator retry guidance:\n{retry}")
+            parts.append(f"Master agent retry guidance:\n{retry}")
         parts.append(
             "Deliver a verified artifact matching your role contract. "
             "Propose durable memory only with evidence."

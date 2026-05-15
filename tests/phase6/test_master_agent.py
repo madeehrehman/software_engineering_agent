@@ -1,4 +1,4 @@
-"""Phase 6: orchestrator brain — supervisor LLM (planning, gates, dispatch briefs)."""
+"""Phase 6: orchestrator master agent — supervisor LLM (planning, gates, dispatch briefs)."""
 
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ from sdlc_agent.llm.openai_client import OpenAIClient
 from sdlc_agent.memory import initialize_deepagent
 from sdlc_agent.memory.stores import MemoryStores
 from sdlc_agent.orchestrator import SDLCPhase
-from sdlc_agent.orchestrator.brain import OrchestratorBrain
 from sdlc_agent.orchestrator.dispatcher import Orchestrator
+from sdlc_agent.orchestrator.master_agent import MasterAgent
 from sdlc_agent.orchestrator.state_machine import GateDecision, TicketState
 from sdlc_agent.subagents.mocks import CannedSubagent, canned_successful_artifact
 
@@ -72,31 +72,31 @@ def _ok_registry() -> dict[SubagentName, CannedSubagent]:
     }
 
 
-def test_brain_create_plan_persists_on_state(
+def test_master_agent_create_plan_persists_on_state(
     tmp_repo: Path,
     fake_llm_factory: Callable[[list[Any]], OpenAIClient],
 ) -> None:
     paths = initialize_deepagent(tmp_repo)
     stores = MemoryStores(paths)
     llm = fake_llm_factory([_plan_response()])
-    brain = OrchestratorBrain(stores, llm)
+    master = MasterAgent(stores, llm)
     state = TicketState(ticket_id="T-1", ticket_inputs={"jira_key": "T-1"})
 
-    plan = brain.create_plan(state)
+    plan = master.create_plan(state)
 
     assert plan["goal"] == "Deliver DEMO-42 TokenBucket rate limiter"
     assert state.plan is not None
     assert state.plan["current_focus"] == "Requirements analysis"
 
 
-def test_brain_gate_retry_stores_guidance(
+def test_master_agent_gate_retry_stores_guidance(
     tmp_repo: Path,
     fake_llm_factory: Callable[[list[Any]], OpenAIClient],
 ) -> None:
     paths = initialize_deepagent(tmp_repo)
     stores = MemoryStores(paths)
     llm = fake_llm_factory([_gate_retry("fix acceptance criteria")])
-    brain = OrchestratorBrain(stores, llm)
+    master = MasterAgent(stores, llm)
     state = TicketState(ticket_id="T-1")
     artifact = ArtifactReturn(
         task_id="t",
@@ -104,7 +104,7 @@ def test_brain_gate_retry_stores_guidance(
         verification=VerificationBlock(passed=False),
     )
 
-    decision, _ = brain.evaluate_gate(
+    decision, _ = master.evaluate_gate(
         SDLCPhase.REQUIREMENTS_GATE,
         artifact,
         state,
@@ -116,21 +116,21 @@ def test_brain_gate_retry_stores_guidance(
     assert "fix acceptance criteria" in state.retry_notes[SDLCPhase.REQUIREMENTS_ANALYSIS.value]
 
 
-def test_brain_dispatch_brief_includes_plan_and_retry(
+def test_master_agent_dispatch_brief_includes_plan_and_retry(
     tmp_repo: Path,
     fake_llm_factory: Callable[[list[Any]], OpenAIClient],
 ) -> None:
     paths = initialize_deepagent(tmp_repo)
     stores = MemoryStores(paths)
     llm = fake_llm_factory([_plan_response()])
-    brain = OrchestratorBrain(stores, llm)
+    master = MasterAgent(stores, llm)
     state = TicketState(
         ticket_id="T-1",
         plan=_plan_response(),
         retry_notes={SDLCPhase.DEVELOPMENT.value: "tests must be green"},
     )
 
-    brief = brain.build_task_description(
+    brief = master.build_task_description(
         state,
         SDLCPhase.DEVELOPMENT,
         SubagentName.DEVELOPER,
@@ -141,7 +141,7 @@ def test_brain_dispatch_brief_includes_plan_and_retry(
     assert "tests must be green" in brief
 
 
-def test_orchestrator_with_brain_runs_full_ticket(
+def test_orchestrator_with_master_agent_runs_full_ticket(
     tmp_repo: Path,
     fake_llm_factory: Callable[[list[Any]], OpenAIClient],
 ) -> None:
@@ -155,27 +155,27 @@ def test_orchestrator_with_brain_runs_full_ticket(
     llm = fake_llm_factory(canned)
     orch = Orchestrator(paths=paths, registry=_ok_registry(), llm=llm)
 
-    state = orch.intake("T-BRAIN", ticket_inputs={"jira_key": "T-BRAIN"})
+    state = orch.intake("T-MASTER", ticket_inputs={"jira_key": "T-MASTER"})
     assert state.plan is not None
     assert state.plan["goal"]
 
-    final = orch.run_to_completion("T-BRAIN")
+    final = orch.run_to_completion("T-MASTER")
     assert final.current_phase is SDLCPhase.DONE
 
     episodes = [e["kind"] for e in MemoryStores(paths).read_episodes()]
-    assert "orchestrator_plan" in episodes
+    assert "master_agent_plan" in episodes
 
 
 def test_orchestrator_without_llm_uses_legacy_gates(tmp_repo: Path) -> None:
     paths = initialize_deepagent(tmp_repo)
     orch = Orchestrator(paths=paths, registry=_ok_registry())
-    assert orch.brain is None
+    assert orch.master_agent is None
 
     final = orch.run_to_completion("T-LEGACY")
     assert final.current_phase is SDLCPhase.DONE
 
 
-def test_assignment_uses_brain_brief_not_generic_stub(
+def test_assignment_uses_master_agent_brief_not_generic_stub(
     tmp_repo: Path,
     fake_llm_factory: Callable[[list[Any]], OpenAIClient],
 ) -> None:

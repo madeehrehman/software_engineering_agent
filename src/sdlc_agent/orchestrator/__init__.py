@@ -4,9 +4,9 @@ Only state-machine types are re-exported here. The ``Orchestrator`` class lives
 in :mod:`sdlc_agent.orchestrator.dispatcher` and must be imported from there to
 avoid a circular import via :mod:`sdlc_agent.memory.stores`.
 
-The orchestrator **brain** (supervisor LLM) lives in :mod:`sdlc_agent.orchestrator.brain`
-(import from there — not re-exported here to avoid a circular import with
-:mod:`sdlc_agent.memory.stores`).
+The orchestrator **master agent** (supervisor LLM) lives in
+:mod:`sdlc_agent.orchestrator.master_agent` (import from there — not re-exported
+here to avoid a circular import with :mod:`sdlc_agent.memory.stores`).
 """
 
 from sdlc_agent.orchestrator.state_machine import (

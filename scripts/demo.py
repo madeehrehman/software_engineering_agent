@@ -265,7 +265,7 @@ def _developer_summary() -> dict[str, Any]:
     }
 
 
-def _orchestrator_plan() -> dict[str, Any]:
+def _master_agent_plan() -> dict[str, Any]:
     return {
         "goal": "Implement DEMO-42 TokenBucket rate limiter with deterministic unittest coverage",
         "current_focus": "Requirements analysis from Jira DEMO-42",
@@ -275,11 +275,11 @@ def _orchestrator_plan() -> dict[str, Any]:
             "Independent PR review of git diff",
         ],
         "risks": ["thread safety explicitly out of scope for v1"],
-        "notes": "Supervisor plan; gates owned by orchestrator brain.",
+        "notes": "Supervisor plan; gates owned by orchestrator master agent.",
     }
 
 
-def _orchestrator_gate_proceed() -> dict[str, Any]:
+def _master_agent_gate_proceed() -> dict[str, Any]:
     return {
         "decision": "proceed",
         "rationale": "Phase gate criteria satisfied; advancing SDLC.",
@@ -390,14 +390,14 @@ def _run_demo(target_repo: Path, *, quiet: bool) -> int:
 
     canned_llm = _make_canned_client(
         [
-            _orchestrator_plan(),
+            _master_agent_plan(),
             _backlog_response(),
-            _orchestrator_gate_proceed(),
+            _master_agent_gate_proceed(),
             *_developer_steps(),
             _developer_summary(),
-            _orchestrator_gate_proceed(),
+            _master_agent_gate_proceed(),
             _reviewer_response(),
-            _orchestrator_gate_proceed(),
+            _master_agent_gate_proceed(),
         ]
     )
 
@@ -433,7 +433,7 @@ def _run_demo(target_repo: Path, *, quiet: bool) -> int:
     say(f"      session_id:         {orch_session}")
     say("      subagents wired:    BacklogAnalyzer, Developer, PRReviewer")
 
-    say("\n[3/4] Running orchestrator (supervisor brain + subagents) -> run_to_completion()")
+    say("\n[3/4] Running orchestrator (master agent + subagents) -> run_to_completion()")
     orch = Orchestrator(
         paths=paths,
         registry=registry,

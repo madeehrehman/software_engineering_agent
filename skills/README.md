@@ -12,6 +12,7 @@ target project's `.deepagent/`. Project-specific knowledge stays under
 | `requirement-ambiguity-checklist.md`  | Backlog Analyzer  | What "ambiguous" means; how to phrase missing-info.    |
 | `tdd-discipline.md`                   | Developer         | The red/green/refactor loop and self-verification.     |
 | `pr-review-rubric.md`                 | PR Reviewer       | Severity/category taxonomy and verdict criteria.       |
+| `master-agent.md`                     | Master agent      | Supervisor planning, gating, and dispatch doctrine.  |
 
 ## How loading works
 

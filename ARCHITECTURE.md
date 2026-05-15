@@ -60,6 +60,26 @@ and `src/sdlc_agent/orchestrator/curation.py` (gate). The dispatcher
 (`dispatcher.py`) is glue: it pulls from the FSM, dispatches to a subagent
 in the registry, runs returned proposals through the gate, then transitions.
 
+**Supervisor reasoning (when wired).** The spec's "planning tool" for the
+orchestrator is implemented as **`MasterAgent`** in
+`src/sdlc_agent/orchestrator/master_agent.py`. Pass `llm=` (and optionally
+`recorder=` / `skills=`) into `Orchestrator`, or inject a custom
+`MasterAgent` via `master_agent=`. When present, the master agent:
+
+- **`create_plan()`** at intake — persists `TicketState.plan` (goal,
+  phase checklist, risks, current focus).
+- **`evaluate_gate()`** at each SDLC gate — LLM chooses
+  `proceed` / `retry` / `blocked` / `needs_human` with rationale; retry
+  guidance lands in `TicketState.retry_notes` for the next dispatch.
+- **`build_task_description()`** — master-agent-authored dispatch brief
+  (plan + retry notes), not a generic stub.
+
+Without `llm` / `master_agent`, gates fall back to deterministic
+`evaluate_default_gate()` in `state_machine.py` (self-checks + attempt
+limits). That path keeps Phase 1–5 tests and minimal wiring fast; the
+demo and production-shaped runs pass `llm=` so the orchestrator acts as
+the deep-agent supervisor described in spec §3.1.
+
 ---
 
 ## 3. Subagents are stateless; assignments are stateful by injection
@@ -132,6 +152,14 @@ short-circuits on the approver's behalf, which is what lets us swap
 `HaltForHuman` for `AutoApprove` (CI), `AutoReject` (audit smoke), or
 `ScriptedApprover` (tests) without touching the dispatcher.
 
+**Who picks the route.** With `MasterAgent` wired, gate decisions are
+LLM-judged against phase criteria and the artifact body, then passed through
+**safety rails** (subagent `NEEDS_HUMAN` → `needs_human`; max attempts →
+`blocked`; malformed LLM output → fallback to `evaluate_default_gate`).
+Without the master agent, `evaluate_default_gate()` alone applies the same
+routing table from self-checks — no semantic judgment, but the FSM and
+episodic log shape are identical.
+
 ---
 
 ## 6. Memory has three stores with three lifetimes; curation is gated
@@ -179,12 +207,14 @@ the gate.
 
 **Decision.** Skills (`skills/*.md`) are versioned, project-agnostic units
 of know-how — `tdd-discipline`, `pr-review-rubric`,
-`requirement-ambiguity-checklist`. They live in the *system* repo, are
-loaded lazily by a shared `SkillLoader`, and are prepended to each
-subagent's system prompt under a clearly-marked section.
+`requirement-ambiguity-checklist`, and **`master-agent`** (orchestrator
+supervisor doctrine). They live in the *system* repo, are loaded lazily by
+a shared `SkillLoader`, and are prepended to each role's system prompt
+under a clearly-marked section (subagents and `MasterAgent` alike).
 
 Skill resolution is **static per-role** in this build: each subagent
-class declares `DEFAULT_SKILLS: tuple[str, ...]`. This is the minimum
+class declares `DEFAULT_SKILLS: tuple[str, ...]`; `MasterAgent` uses
+`DEFAULT_MASTER_AGENT_SKILLS = ("master-agent",)`. This is the minimum
 viable plumbing; the spec contemplates skills being "named in or resolved
 from the task assignment," which is an additive change — add a
 `skills: list[str]` field to `TaskAssignment` and resolve dynamically when
@@ -217,7 +247,8 @@ swap an implementation under an existing seam.
   the `Sandbox` Protocol; a `DockerSandbox` is a drop-in replacement when
   the deployment target moves off the developer's laptop.
 - **LangGraph supervisor wrapper.** The current `Orchestrator` is a hand-
-  rolled FSM. LangGraph adds graphical introspection and built-in
+  rolled FSM with an optional in-process **`MasterAgent`** supervisor LLM
+  (not LangGraph). LangGraph would add graphical introspection and built-in
   checkpointing; the existing per-transition `save_ticket_state` already
   provides the durability guarantee LangGraph's checkpointing would.
 - **CLI entrypoints** (`sdlc-agent init|run|status`). `scripts/demo.py`
@@ -240,8 +271,13 @@ Start at the seams, not the implementations:
    LLM, no MCP. The phase graph in spec §4 is implemented here verbatim.
 3. `src/sdlc_agent/orchestrator/dispatcher.py` — the only file that does
    real work. Dispatch → curation → gate → transition → persist, with HITL
-   plugged in via a Protocol.
-4. `src/sdlc_agent/subagents/` — each subagent is ~150–350 LOC of prompt +
+   plugged in via a Protocol. Optional `MasterAgent` for plan + gate + briefs.
+4. `src/sdlc_agent/orchestrator/master_agent.py` — supervisor system prompt,
+   structured LLM calls (`master_agent.plan`, `master_agent.gate` trajectory
+   kinds), and dispatch brief assembly. Read after the dispatcher if you care
+   why the orchestrator is a "deep agent" and not only a router.
+5. `src/sdlc_agent/subagents/` — each subagent is ~150–350 LOC of prompt +
    self-checks. They're interchangeable.
-5. `scripts/demo.py` — the only place all of the above are wired together
-   end-to-end against a non-trivial fixture ticket.
+6. `scripts/demo.py` — wires `llm`, `recorder`, and `skills` on both
+   subagents and `Orchestrator` (master agent included) against fixture
+   ticket DEMO-42.
