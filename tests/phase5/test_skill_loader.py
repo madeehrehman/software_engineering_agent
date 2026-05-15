@@ -22,6 +22,7 @@ def test_default_loader_lists_repo_skills() -> None:
         "tdd-discipline",
         "pr-review-rubric",
         "requirement-ambiguity-checklist",
+        "orchestrator-supervisor",
     } <= available
 
 

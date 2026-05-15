@@ -265,6 +265,28 @@ def _developer_summary() -> dict[str, Any]:
     }
 
 
+def _orchestrator_plan() -> dict[str, Any]:
+    return {
+        "goal": "Implement DEMO-42 TokenBucket rate limiter with deterministic unittest coverage",
+        "current_focus": "Requirements analysis from Jira DEMO-42",
+        "phase_checklist": [
+            "Analyze DEMO-42 and confirm acceptance criteria",
+            "TDD implementation in sandbox",
+            "Independent PR review of git diff",
+        ],
+        "risks": ["thread safety explicitly out of scope for v1"],
+        "notes": "Supervisor plan; gates owned by orchestrator brain.",
+    }
+
+
+def _orchestrator_gate_proceed() -> dict[str, Any]:
+    return {
+        "decision": "proceed",
+        "rationale": "Phase gate criteria satisfied; advancing SDLC.",
+        "retry_guidance": "",
+    }
+
+
 def _reviewer_response() -> dict[str, Any]:
     return {
         "artifact": {
@@ -368,10 +390,14 @@ def _run_demo(target_repo: Path, *, quiet: bool) -> int:
 
     canned_llm = _make_canned_client(
         [
+            _orchestrator_plan(),
             _backlog_response(),
+            _orchestrator_gate_proceed(),
             *_developer_steps(),
             _developer_summary(),
+            _orchestrator_gate_proceed(),
             _reviewer_response(),
+            _orchestrator_gate_proceed(),
         ]
     )
 
@@ -407,8 +433,15 @@ def _run_demo(target_repo: Path, *, quiet: bool) -> int:
     say(f"      session_id:         {orch_session}")
     say("      subagents wired:    BacklogAnalyzer, Developer, PRReviewer")
 
-    say("\n[3/4] Running orchestrator -> run_to_completion()")
-    orch = Orchestrator(paths=paths, registry=registry, session_id=orch_session)
+    say("\n[3/4] Running orchestrator (supervisor brain + subagents) -> run_to_completion()")
+    orch = Orchestrator(
+        paths=paths,
+        registry=registry,
+        session_id=orch_session,
+        llm=canned_llm,
+        recorder=recorder,
+        skills=skills,
+    )
     state = orch.intake(
         "DEMO-42",
         ticket_inputs={
@@ -432,6 +465,8 @@ def _run_demo(target_repo: Path, *, quiet: bool) -> int:
     say("\n[4/4] Results")
     say(f"  Final phase:           {final.current_phase.value}")
     assert final.current_phase is SDLCPhase.DONE, "demo expected to terminate at DONE"
+    if final.plan:
+        say(f"  Orchestrator plan:     {final.plan.get('goal', '')[:70]}...")
     stores = MemoryStores(paths)
     facts = stores.read_project_facts()
     say(f"  Project facts:         {len(facts)} promoted")

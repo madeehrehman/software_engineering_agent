@@ -137,6 +137,10 @@ class TicketState(BaseModel):
     history: list[TransitionRecord] = Field(default_factory=list)
     blocked_reason: str | None = None
     ticket_inputs: dict[str, Any] = Field(default_factory=dict)
+    plan: dict[str, Any] | None = None
+    """Long-horizon plan authored by the orchestrator brain (spec §3.1)."""
+    retry_notes: dict[str, str] = Field(default_factory=dict)
+    """Per work-phase guidance from the last RETRY gate decision (phase value → text)."""
 
     def record_transition(
         self,

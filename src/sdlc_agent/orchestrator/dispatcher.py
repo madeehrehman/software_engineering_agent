@@ -18,8 +18,11 @@ from sdlc_agent.contracts import (
     SubagentName,
     TaskAssignment,
 )
+from sdlc_agent.llm import OpenAIClient
 from sdlc_agent.memory.paths import DeepAgentPaths
 from sdlc_agent.memory.stores import MemoryStores
+from sdlc_agent.memory.trajectories import TrajectoryRecorder
+from sdlc_agent.orchestrator.brain import OrchestratorBrain
 from sdlc_agent.orchestrator.curation import (
     CurationGate,
     CurationResult,
@@ -27,6 +30,7 @@ from sdlc_agent.orchestrator.curation import (
     is_promoted,
 )
 from sdlc_agent.orchestrator.hitl import GateApprover, HaltForHuman
+from sdlc_agent.skills import SkillLoader
 from sdlc_agent.orchestrator.state_machine import (
     GATE_PHASES,
     GateDecision,
@@ -79,6 +83,10 @@ class Orchestrator:
         approver: GateApprover | None = None,
         curation: CurationGate | None = None,
         session_id: str | None = None,
+        llm: OpenAIClient | None = None,
+        recorder: TrajectoryRecorder | None = None,
+        skills: SkillLoader | None = None,
+        brain: OrchestratorBrain | None = None,
     ) -> None:
         self.paths = paths
         self.registry = registry
@@ -88,6 +96,18 @@ class Orchestrator:
         self.approver: GateApprover = approver or HaltForHuman()
         self.curation = curation or CurationGate(self.memory)
         self.session_id = session_id or uuid.uuid4().hex[:12]
+        self.recorder = recorder
+        if brain is not None:
+            self.brain = brain
+        elif llm is not None:
+            self.brain = OrchestratorBrain(
+                self.memory,
+                llm,
+                recorder=recorder,
+                skills=skills,
+            )
+        else:
+            self.brain = None
 
     # ---------------------------------------------------------------- intake
     def intake(
@@ -112,6 +132,13 @@ class Orchestrator:
             ticket_inputs=dict(ticket_inputs or {}),
         )
         state.record_transition(SDLCPhase.REQUIREMENTS_ANALYSIS, rationale="intake")
+        if self.brain is not None and state.plan is None:
+            self.brain.create_plan(state)
+            self._log_episode(
+                "orchestrator_plan",
+                state,
+                extra={"goal": (state.plan or {}).get("goal", "")},
+            )
         self.memory.save_ticket_state(state)
         self._log_episode("transition", state, state.history[-1])
         return state
@@ -213,6 +240,14 @@ class Orchestrator:
                 gate, approval, attempts_in_phase=attempts
             )
             self._log_hitl_event(state, gate, approval)
+        elif self.brain is not None:
+            decision, rationale = self.brain.evaluate_gate(
+                gate,
+                artifact,
+                state,
+                attempts_in_phase=attempts,
+                max_attempts=self.max_attempts_per_phase,
+            )
         else:
             decision, rationale = evaluate_default_gate(
                 gate,
@@ -329,11 +364,19 @@ class Orchestrator:
             "attempt": attempt,
         }
         inputs.update(self._prior_artifact_inputs(state, phase))
+        if self.brain is not None:
+            task_text = self.brain.build_task_description(
+                state, phase, subagent, attempt
+            )
+        else:
+            task_text = (
+                f"Execute {phase.value} for ticket {state.ticket_id} (attempt {attempt})."
+            )
         return TaskAssignment(
             task_id=f"{state.ticket_id}-{phase.value.lower()}-a{attempt}-{uuid.uuid4().hex[:6]}",
             ticket_id=state.ticket_id,
             subagent=subagent,
-            task=f"Execute {phase.value} for ticket {state.ticket_id} (attempt {attempt}).",
+            task=task_text,
             inputs=inputs,
             injected_context=injected,
             constraints=Constraints(
